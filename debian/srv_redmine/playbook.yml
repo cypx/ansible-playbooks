@@ -1,0 +1,135 @@
+---
+- hosts: redmine-server
+
+  user: root
+
+  vars:
+    env:
+      RUNLEVEL: 1
+
+  vars_prompt:
+  - name: "postgresql_redmine_db_pass"
+    prompt: "redmine user password for PostgreSQL"
+    private: yes
+    confirm: yes
+
+  tasks:
+
+  - name: updates server
+    apt: update_cache=yes
+
+  - name: upgrade server
+    apt: upgrade=full
+
+  - name: install curl
+    apt: name=curl state=present
+
+  - name: create redmine user
+    user: name=redmine shell=/bin/bash
+
+  - name: Install RVM
+    shell: su redmine -c "/usr/bin/curl -L get.rvm.io | /bin/bash -s stable"
+
+  - name: Install RVM Requirements
+    shell: >
+      executable=/bin/bash source /home/redmine/.rvm/scripts/rvm;
+      rvm requirements
+
+  - name: install redmine requirements
+    apt: name={{ item }} state=present
+    with_items:
+      - imagemagick
+      - libmagickwand-dev
+      - libmysqlclient-dev
+      - supervisor
+      - git
+      - subversion
+
+  - name: Install the PostgreSQL packages in Debian derivatives
+    apt: name={{ item }} state=installed update_cache=yes
+    with_items:
+      - python-selinux
+      - postgresql
+      - libpq-dev
+      - python-psycopg2
+    environment: env
+    when: ansible_os_family == 'Debian'
+
+  - name: ensure database is created
+    postgresql_db: name=redmine
+    sudo_user: postgres
+
+  - name: ensure user has access to database
+    postgresql_user: db=redmine name=redmine password={{postgresql_redmine_db_pass}} priv=ALL
+    sudo_user: postgres
+
+  - name: ensure user does not have unnecessary privilege
+    postgresql_user: name=redmine role_attr_flags=NOSUPERUSER,NOCREATEDB
+    sudo_user: postgres
+
+  - name: creates redmine src directory
+    file: path=/home/redmine/src state=directory
+
+  - name: check if redmine already be downloaded
+    stat: path=/home/redmine/src/redmine-2.5.2.tar.gz
+    register: redmine_download
+
+  - name: download redmine
+    get_url: url=http://www.redmine.org/releases/redmine-2.5.2.tar.gz
+              dest=/home/redmine/src
+    when: redmine_download.stat.exists == false
+
+  - name: check if redmine already installed
+    stat: path=/home/redmine/srv/Gemfile
+    register: redmine_install
+
+  - name: extract redmine archive
+    unarchive: src=/home/redmine/src/redmine-2.5.2.tar.gz
+                dest=/home/redmine/
+                copy=no
+    when: redmine_install.stat.exists == false
+
+  - name: move extracted file to redmine server folder
+    command: mv /home/redmine/redmine-2.5.2 /home/redmine/srv
+    when: redmine_install.stat.exists == false
+
+  - name: configure redmine database
+    template: src=templates/redmine-database.yml.j2
+                dest=/home/redmine/srv/config/database.yml
+
+  - name: configure redmine global parameter
+    copy: src=files/redmine-configuration.yml
+            dest=/home/redmine/srv/config/configuration.yml
+
+  - name: configure redmine unicorn
+    copy: src=files/redmine-unicorn.rb
+            dest=/home/redmine/srv/config/unicorn.rb
+
+  - name: configure redmine production environment
+    copy: src=files/redmine-production.rb
+            dest=/home/redmine/srv/config/environments/production.rb
+
+  - name: redmine initialization script
+    copy: src=scripts/redmine-init.bash
+            dest=/home/redmine/src/redmine-init.bash
+            mode=0744
+
+  - name: update owner
+    command: chown -R redmine:redmine /home/redmine/src /home/redmine/srv
+
+  - name: Initialize Redmine
+    shell: >
+      su redmine -c /bin/bash -l -c /home/redmine/src/redmine-init.bash
+
+  - name: send supervisord configuration
+    copy: src=files/supervisord-redmine.conf
+            dest=/etc/supervisor/conf.d/redmine.conf
+            owner=root
+            group=root
+            mode=0644
+
+  - name: reload supervisor configuration
+    command: service supervisor force-reload
+
+  - name: restart supervisor and launch redmine server
+    service: name=supervisor state=restarted
