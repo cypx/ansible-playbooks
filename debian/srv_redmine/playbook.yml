@@ -3,6 +3,8 @@
 
   user: root
 
+  sudo: yes
+
   vars:
     env:
       RUNLEVEL: 1
@@ -23,6 +25,9 @@
 
   - name: install curl
     apt: name=curl state=present
+
+  - name: install sudo
+    apt: name=sudo state=present
 
   - name: create redmine user
     user: name=redmine shell=/bin/bash

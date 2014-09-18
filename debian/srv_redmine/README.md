@@ -1,4 +1,4 @@
-# Install Redmine Server
+# Install Redmine Server on debian from scratch
 
 ## Server Stack
 
